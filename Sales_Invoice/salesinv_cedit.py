@@ -4,17 +4,19 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
 import time
 
-# إعداد ChromeDriver مع بروفايل مخصص عشان يحتفظ بالسيشن
-service = Service("D:/chromedriver-win64/chromedriver.exe")
+# إعداد ChromeOptions مع بروفايل مخصص
 options = Options()
 options.add_argument(r"user-data-dir=D:\selenium\chrome_profile")  # مسار البروفايل
 options.add_argument("--profile-directory=Default")  # أو Profile 1 حسب جهازك
+options.add_argument("--start-maximized")
 
-driver = webdriver.Chrome(service=service, options=options)
+# استخدام webdriver-manager لتثبيت ChromeDriver المناسب تلقائيًا
+driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
-wait = WebDriverWait(driver, 1)
+wait = WebDriverWait(driver, 15)
 
 # فتح المتصفح الأول
 driver.maximize_window()
