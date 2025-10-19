@@ -50,6 +50,7 @@ pur_menu = wait.until(EC.element_to_be_clickable((By.XPATH, "(//*[@id='sidebar-m
 pur_menu.click()
 print("✅ فتحت قائمة المشتريات")
 time.sleep(2)
+
 # فتح شاشة مرتجعات المشتريات
 sub_menu = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[@id='sidebar-menu']/li[7]/ul/li[2]/a/span")))
 sub_menu.click()
