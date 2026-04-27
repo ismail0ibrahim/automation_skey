@@ -1,41 +1,32 @@
-import os
-import sys
-import time
-
 from selenium import webdriver
-from selenium.common.exceptions import (
-    ElementClickInterceptedException,
-    StaleElementReferenceException,
-    TimeoutException,
-)
+import random
+import time
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import ElementClickInterceptedException
+from selenium.common.exceptions import StaleElementReferenceException
 from webdriver_manager.chrome import ChromeDriverManager
 
-# تجنب UnicodeEncodeError على طُرفيات Windows (cp1256) عند طباعة الرموز التعبيرية
-if hasattr(sys.stdout, "reconfigure"):
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+# إعداد ChromeOptions مع بروفايل مخصص
+options = Options()
+options.add_argument(r"user-data-dir=D:\selenium\chrome_profile")  # مسار البروفايل
+options.add_argument("--profile-directory=Default")  # أو Profile 1 حسب جهازك
+options.add_argument("--start-maximized")
 
-# مهلة انتظار منطقية (ثوانٍ) — العنصر يُستدعى فور جاهزيته دون نوم ثابت
-MAX_WAIT = 120
-# توقف ثابت قبل كل عملية (نقر / قائمة / كتابة). الافتراضي 1ث؛ خفّضه لتسريع التشغيل.
-# مثال PowerShell: $env:STEP_DELAY="0.25"; python add_item_2_unit_2vndr_2price.py
-STEP_DELAY = float(os.environ.get("STEP_DELAY", "0.5"))
+# استخدام webdriver-manager لتثبيت ChromeDriver المناسب تلقائيًا
+driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
+wait = WebDriverWait(driver, 5)
+short_wait = WebDriverWait(driver, 3)
 
-def step_pause() -> None:
-    time.sleep(STEP_DELAY)
+# توقف قصير بين خطوات الواجهة (زِد القيمة لو الواجهة بطيئة)
+STEP_DELAY = 0.5
 
-
-def wait_click(driver, wait, locator):
-    """نقرة مع انتظار (مثل pur_cash.py) — scroll + JS click عند الحجب."""
+def wait_click(locator):
     for attempt in range(3):
         try:
             element = wait.until(EC.element_to_be_clickable(locator))
@@ -50,432 +41,294 @@ def wait_click(driver, wait, locator):
                 raise
 
 
-def click_when_ready(xpath: str) -> None:
-    step_pause()
-    wait.until(EC.element_to_be_clickable((By.XPATH, xpath))).click()
-
-
-def _visible_list_candidates():
-    """عناصر قائمة Syncfusion المحتملة (القائمة المفتوحة غالبًا تحتوي e-list-item)."""
-    return driver.find_elements(
-        By.XPATH,
-        (
-            "//div[contains(@class,'e-popup-open')]//li"
-            " | //li[contains(@class,'e-list-item')]"
-            " | //div[contains(@class,'e-list-item')]"
-            " | //*[@role='option']"
-        ),
-    )
-
-
-def click_visible_list_option(exact_text: str) -> None:
-    """
-    يختار خيارًا من القائمة المفتوحة حسب النص الكامل.
-    لا يعتمد على أول //li في DOM (قد يكون مخفيًا) — فقط عناصر ظاهرة.
-    """
-    step_pause()
-
-    def pick() -> bool:
-        for el in _visible_list_candidates():
-            try:
-                if not el.is_displayed():
-                    continue
-                t = (el.text or "").strip()
-                if t == exact_text:
-                    driver.execute_script("arguments[0].click();", el)
-                    return True
-            except StaleElementReferenceException:
-                continue
-        return False
-
-    wait.until(lambda _: pick())
-
-
-def click_visible_list_option_contains(substring: str) -> None:
-    """مثل click_visible_list_option لكن يطابق إذا كان substring جزءًا من نص الخيار."""
-    step_pause()
-
-    def pick() -> bool:
-        for el in _visible_list_candidates():
-            try:
-                if not el.is_displayed():
-                    continue
-                if substring in (el.text or ""):
-                    driver.execute_script("arguments[0].click();", el)
-                    return True
-            except StaleElementReferenceException:
-                continue
-        return False
-
-    wait.until(lambda _: pick())
-
-
-def click_add_row_sales_price_grid() -> None:
-    """
-    إضافة سطر في جدول أسعار البيع.
-    يجرّب المسارات بالترتيب؛ أول محاولة تُظهر السطر الثاني (grid-cellitmPrice1) تنجح ثم
-    return يوقف الدالة — لا يُجرَّب [5] إذا نجح [4] ولا أي مسار بعد أول نجاح.
-    """
-    step_pause()
-    candidate_xpaths = [
-        "(//*[@id='grid-cellitmPrice0']/ancestor::div[contains(@class,'e-grid')]//*[@id='Word'])[last()]",
-        "(//*[@id='grid-cellitmPrice0']/ancestor::*[contains(@class,'e-grid')]//*[@id='Word'])[last()]",
-        "//*[@id='SalItmPrice']/following::*//*[@id='grid-cellitmPrice0']/ancestor::div[contains(@class,'e-content')]//*[@id='Word'][last()]",
-        "(//*[@id='Word'])[4]",
-        "(//*[@id='Word'])[5]",
-    ]
-
-    row2_input_xpath = "//*[@id='grid-cellitmPrice1']/input"
-    wait_row = WebDriverWait(driver, 15)
-    last_exc: Exception | None = None
-
-    def second_row_already_there() -> bool:
-        return bool(driver.find_elements(By.XPATH, row2_input_xpath))
-
-    def try_one_click(xp: str) -> bool:
-        """نقرة واحدة؛ نجاح = ظهور سطر السعر الثاني بعد النقرة (وليس كان موجودًا من قبل)."""
-        nonlocal last_exc
-        if second_row_already_there():
-            return True
+def wait_type(locator, value):
+    for attempt in range(3):
         try:
-            el = wait.until(EC.presence_of_element_located((By.XPATH, xp)))
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
-            driver.execute_script("arguments[0].click();", el)
-            wait_row.until(EC.presence_of_element_located((By.XPATH, row2_input_xpath)))
-            return True
-        except (TimeoutException, StaleElementReferenceException) as exc:
-            last_exc = exc
-            return False
-
-    for xp in candidate_xpaths:
-        if try_one_click(xp):
+            field = wait.until(EC.element_to_be_clickable(locator))
+            field.clear()
+            field.send_keys(value)
             return
-
-    raise TimeoutException(
-        "تعذر إضافة سطر جديد في أسعار البيع (زر Word داخل جدول السعر أو [4]/[5])."
-        + (f" آخر خطأ: {last_exc!r}" if last_exc else "")
-    )
+        except StaleElementReferenceException:
+            if attempt == 2:
+                raise
 
 
-def sign_out_via_profile(driver, wait) -> None:
-    """
-    بعد الحفظ: النقر على صورة البروفايل في الهيدر ثم «تسجيل خروج» / «تسجيل الخروج».
-    يطابق صورة المستخدم الافتراضية (defualt-img.jpg في المسار كما في التطبيق).
-    """
-    step_pause()
-    profile_locators = [
-        (
-            By.XPATH,
-            "//img[@alt='image' and contains(@class,'rounded-circle') and contains(@src,'defualt-img.jpg')]",
-        ),
-        (By.XPATH, "//img[contains(@class,'rounded-circle') and contains(@src,'defualt-img.jpg')]"),
-        (By.XPATH, "//img[@alt='image' and contains(@class,'rounded-circle')]"),
-    ]
-    last_prof: Exception | None = None
-    for loc in profile_locators:
+def wait_click_any(locators):
+    for locator in locators:
         try:
-            wait_click(driver, WebDriverWait(driver, 12), loc)
-            break
-        except TimeoutException as exc:
-            last_prof = exc
-    else:
-        raise TimeoutException("لم يُعثر على صورة البروفايل في الهيدر") from last_prof
-
-    step_pause()
-    # الواجهة تعرض النص في <span>تسجيل خروج</span> (بدون «ال») — نفضّل الأسلاف القابلة للنقر ثم الـ span.
-    sign_out_locators = [
-        (By.XPATH, "//span[normalize-space()='تسجيل خروج']/ancestor::a[1]"),
-        (By.XPATH, "//span[normalize-space()='تسجيل خروج']/ancestor::button[1]"),
-        (By.XPATH, "//span[normalize-space()='تسجيل خروج']/ancestor::li[1]"),
-        (By.XPATH, "//span[normalize-space()='تسجيل خروج']"),
-        (By.XPATH, "//a[normalize-space()='تسجيل الخروج']"),
-        (By.XPATH, "//button[normalize-space()='تسجيل الخروج']"),
-        (By.XPATH, "//*[contains(normalize-space(.),'تسجيل الخروج') and (self::a or self::button)]"),
-        (By.XPATH, "//a[contains(normalize-space(.),'Sign out')]"),
-        (By.XPATH, "//a[contains(normalize-space(.),'Logout')]"),
-    ]
-    last_out: Exception | None = None
-    short = WebDriverWait(driver, 6)
-    for loc in sign_out_locators:
-        try:
-            wait_click(driver, short, loc)
-            print("[OK] تم تسجيل الخروج")
-            try:
-                short.until(EC.presence_of_element_located((By.ID, "usrCode")))
-            except TimeoutException:
-                pass
+            wait_click(locator)
             return
-        except TimeoutException as exc:
-            last_out = exc
-    # لو الـ span ظاهر لكن Selenium لا يعتبره clickable، ننقر بـ JS على نفس النص.
-    try:
-        el = WebDriverWait(driver, 5).until(
-            EC.presence_of_element_located((By.XPATH, "//span[normalize-space()='تسجيل خروج']"))
-        )
-        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
-        driver.execute_script("arguments[0].click();", el)
-        print("[OK] تم تسجيل الخروج")
-        try:
-            short.until(EC.presence_of_element_located((By.ID, "usrCode")))
         except TimeoutException:
-            pass
-        return
+            continue
+    raise TimeoutException(f"No clickable locator matched: {locators}")
+
+
+def get_open_list_options():
+    return wait.until(
+        lambda d: [
+            el for el in d.find_elements(
+                By.XPATH,
+                "//div[contains(@class,'e-popup-open')]//li[contains(@class,'e-list-item') and not(contains(@class,'e-disabled')) and normalize-space()]"
+            )
+            if el.is_displayed()
+        ]
+    )
+
+
+def click_dynamic_list_option(get_options, pick_option, max_attempts=4):
+    """
+    Re-locate popup options on each retry to avoid stale references.
+    """
+    last_error = None
+    for _ in range(max_attempts):
+        try:
+            options = get_options()
+            if not options:
+                raise TimeoutException("No visible options in open popup list.")
+            selected = pick_option(options)
+            selected_text = selected.text.strip()
+            driver.execute_script("arguments[0].click();", selected)
+            return selected_text
+        except StaleElementReferenceException as exc:
+            last_error = exc
+            time.sleep(0.3)
+    if last_error:
+        raise last_error
+    raise TimeoutException("Failed to click dynamic list option.")
+
+
+def wait_save_complete():
+    spinner_locator = (By.XPATH, "//div[contains(@class,'e-spinner-pane')]")
+    # أحيانًا الـ spinner لا يظهر، لذلك لا نفشل إذا لم يظهر.
+    try:
+        short_wait.until(EC.visibility_of_element_located(spinner_locator))
     except TimeoutException:
         pass
-    raise TimeoutException("لم يُعثر على خيار تسجيل الخروج في قائمة المستخدم") from last_out
+    wait.until(EC.invisibility_of_element_located(spinner_locator))
+    # مهلة بصرية قصيرة لتأكيد الحفظ على الشاشة.
+    time.sleep(0.5)
 
 
-LOOP_COUNT = 10
+def open_invoice_edit_mode():
+    # نجرب عدة locators لأن زر "تعديل" قد يختلف شكله بين الشاشات.
+    wait_click_any([
+        (By.XPATH, "//button[@title='تعديل-']"),
+        (By.XPATH, "//button[contains(@title,'تعديل')]"),
+        (By.XPATH, "//button[i[contains(@class,'fa-edit')]]"),
+        (By.XPATH, "//ul[@id='quick-menu-body']//button[contains(normalize-space(.), 'تعديل')]"),
+        (By.XPATH, "//ul[@id='quick-menu-body']//button[contains(normalize-space(.), 'تحرير')]"),
+    ])
 
-for run in range(1, LOOP_COUNT + 1):
-    print(f"\n=== تشغيل الدورة {run}/{LOOP_COUNT} — السيناريو كامل من فتح المتصفح ===\n")
 
-    # إعداد المتصفح وفتحه — بداية كل دورة (ليس فقط إعادة تحميل الموقع)
-    options = Options()
-    options.add_argument(r"user-data-dir=D:\selenium\chrome_profile")  # مسار البروفايل
-    options.add_argument("--profile-directory=Default")  # أو Profile 1 حسب جهازك
-    options.add_argument("--start-maximized")
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-    wait = WebDriverWait(driver, MAX_WAIT)
-    short_wait = WebDriverWait(driver, 3)
+def change_payment_method_after_second_edit(previous_payment_name):
+    # افتح تبويب طريقة الدفع أثناء التعديل الثاني.
+    wait_click_any([
+        (By.XPATH, "//button[normalize-space(text())='طريقة الدفع']"),
+        (By.XPATH, "//button[contains(normalize-space(.),'طريقة الدفع')]"),
+    ])
 
-    print("[OK] فتح المتصفح")
-
-    # فتح صفحة تسجيل الدخول (لو فيه سيشن محفوظة مش هيطلب Login) — نفس منطق pur_cash.py
-    driver.get("https://app.skeyerp.com/auth/ismailtest/login")
-    print("[OK] فتح صفحة تسجيل الدخول")
-
+    # حاول حذف الطريقة الحالية حتى نضمن اختيار قيمة جديدة.
     try:
-        usr_code = short_wait.until(EC.visibility_of_element_located((By.ID, "usrCode")))
-        usr_code.send_keys("admin")
-        driver.find_element(By.ID, "usrPswrd").send_keys("123456")
-        wait_click(
-            driver,
-            wait,
-            (By.XPATH, "//*[@id='index']/div[1]/div/div[1]/div/div/div/div[2]/form/div[4]/button"),
-        )
-        wait.until(EC.presence_of_element_located((By.XPATH, '//*[@id="theme_Basic_theme"]')))
-        print("[OK] دخلت Dashboard")
+        wait_click_any([
+            (By.XPATH, "//button[i[contains(@class,'fa-trash-alt')]]"),
+            (By.XPATH, "//i[contains(@class,'fa-trash-alt')]/ancestor::button[1]"),
+        ])
+        print("[OK] حذفت طريقة الدفع القديمة")
     except TimeoutException:
-        print("[INFO] غالبًا السيشن محفوظة بالفعل ومش محتاج Login")
+        print("[INFO] لا توجد طريقة دفع قديمة لحذفها")
 
-    wait.until(EC.presence_of_element_located((By.ID, "sidebar-menu")))
-    step_pause()
+    # افتح dropdown الخاص بطريقة الدفع.
+    wait_click_any([
+        (By.XPATH, "//input[@placeholder='طريقة الدفع']/following-sibling::span[contains(@class,'e-ddl-icon')]"),
+        (By.XPATH, "//input[contains(@placeholder,'الدفع')]/following-sibling::span[contains(@class,'e-ddl-icon')]"),
+    ])
 
-    # ✅ الدخول إلى القائمة الجانبية
-    click_when_ready("//*[@id='sidebar-menu']/li[5]/a")
-    click_when_ready("//ul[@id='sidebar-menu']/li[5]/ul/li/a/span")
-
-    # ✅ الضغط على زر الإضافة (أو أيقونة معينة)
-    click_when_ready("//div[@id='itemData70_toolbarItems']/div/div/div/i")
-    step_pause()
-    # ✅ فتح قائمة منسدلة
-    click_when_ready("(//span[contains(@class,'e-search-icon')])[2]")
-
-    # انتظار ظهور القائمة ثم اختيار اسم المجموعة (خيار ظاهر فقط — لا أول li في DOM)
-    click_visible_list_option_contains("001 - مجموعة عامة")
-
-    # ✅ قراءة آخر رقم من الملف (أو البدء من 0)
-    try:
-        with open("counter.txt", "r", encoding="utf-8") as f:
-            counter = int(f.read().strip())
-    except Exception:
-        counter = 0
-
-    # ✅ زيادة الرقم واحد
-    counter += 1
-
-    # ✅ توليد اسم الصنف الجديد
-    item_name = f"item {counter}"
-    item_code = str(counter)
-
-    # ✅ حفظ الرقم الجديد في الملف
-    with open("counter.txt", "w", encoding="utf-8") as f:
-        f.write(str(counter))
-
-    # ✅ تحديد حقل رقم الصنف وكتابة الرقم
-    step_pause()
-    itm_code = wait.until(
-        EC.element_to_be_clickable((By.XPATH, "//input[@name='itmCode' and @placeholder='رقم الصنف']"))
+    # اختَر طريقة مختلفة عن السابقة، وإن لم توجد اختر أول خيار.
+    new_payment_name = click_dynamic_list_option(
+        get_options=get_open_list_options,
+        pick_option=lambda options: next(
+            (opt for opt in options if opt.text.strip() != previous_payment_name),
+            options[0]
+        ),
     )
-    itm_code.clear()
-    itm_code.send_keys(item_code)
-    print(f"✅ تم إدخال رقم الصنف: {item_code}")
+    print(f"[OK] غيرت طريقة الدفع إلى: {new_payment_name}")
+    return new_payment_name
 
-    # ✅ تحديد الحقل وكتابة الاسم الجديد
-    step_pause()
-    itm_name = wait.until(
-        EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='اسم الصنف']"))
-    )
-    itm_name.clear()
-    itm_name.send_keys(item_name)
+# فتح المتصفح الأول
+print("[OK] فتح المتصفح")
 
-    print(f"✅ تمت كتابة اسم الصنف: {item_name}")
 
-    # إدخال التكلفة الأولية = 10
-    step_pause()
-    cost_field = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@name='itmPrmryCost']")))
-    cost_field.clear()
-    cost_field.send_keys("10")
-    print("✅ تم إدخال التكلفة الأولية بنجاح (10)")
+# فتح صفحة تسجيل الدخول (لو فيه سيشن محفوظة مش هيطلب Login)
+driver.get("https://app.skeyerp.com/auth/ismailtest/login")
+print("[OK] فتح صفحة تسجيل الدخول")
 
-    # ✅ افتح تبويب "وحدات القياس"
-    click_when_ready("//a[@id='InvItmMunt']/span")
+# لو محتاج أول مرة تسجل الدخول بالكود بتاعك
+try:
+    usr_code = short_wait.until(EC.visibility_of_element_located((By.ID, "usrCode")))
+    # تسجيل الدخول
+    usr_code.send_keys("admin")
+    driver.find_element(By.ID, "usrPswrd").send_keys("123456")
 
-    # ✅ فتح وحدات القياس
-    open_units_dropdown_xpath = "(//span[contains(@class,'e-ddl-icon') and contains(@class,'e-search-icon')])[9]"
-    click_when_ready(open_units_dropdown_xpath)
-
-    # ✅ الآن اختر العنصر "Unit"
-    click_visible_list_option("Unit")
-    print("✅ تم اختيار وحدة القياس: Unit ✅")
-
-    # ✅ الضغط على زر الإضافة داخل تبويب وحدات القياس
-    click_when_ready("(//*[@id='Word'])[1]")
-
-    # فتح قائمة البحث عن الوحدة
-    click_when_ready(
-        "(//span[contains(@class,'e-input-group-icon') and contains(@class,'e-ddl-icon') and contains(@class,'e-search-icon')])[10]"
+    wait_click(
+        (By.XPATH, "//*[@id='index']/div[1]/div/div[1]/div/div/div/div[2]/form/div[4]/button")
     )
 
-    # ✅ الآن اختر العنصر "Box"
-    click_visible_list_option("Box")
+    # انتظار ظهور Dashboard
+    wait.until(EC.presence_of_element_located((By.XPATH, '//*[@id="theme_Basic_theme"]')))
+    print("[OK] دخلت Dashboard")
+except TimeoutException:
+    print("[INFO] غالبًا السيشن محفوظة بالفعل ومش محتاج Login")
 
-    # ✅ اضافة العبوة للوحده الجديده
-    step_pause()
-    cost_field = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[@id='grid-cellitmSz1']/input")))
-    cost_field.clear()
-    cost_field.send_keys("12")
-    print("✅ تم إدخال العبوة بنجاح (12)")
+# تأكيد وجود القائمة الجانبية قبل خطوات المشتريات
+wait.until(EC.presence_of_element_located((By.ID, "sidebar-menu")))
 
-    # ✅ فتح تبويب "الموردين"
-    click_when_ready("//*[@id='InvItmVndr']")
+# الذهاب لقائمة المشتريات
+wait_click_any([
+    (By.XPATH, "//ul[@id='sidebar-menu']//span[contains(normalize-space(.),'إدارة أنظمة المشتريات')]/ancestor::a[1]"),
+    (By.XPATH, "//ul[@id='sidebar-menu']//span[contains(normalize-space(.),'المشتريات')]/ancestor::a[1]"),
+    (By.XPATH, "//*[@id='sidebar-menu']/li[7]/a"),
+])
+print("[OK] فتحت قائمة المشتريات")
 
-    # فتح قائمة البحث عن المورد الاول
-    click_when_ready(
-        "(//span[contains(@class,'e-input-group-icon') and contains(@class,'e-ddl-icon') and contains(@class,'e-search-icon')])[11]"
-    )
+# فتح شاشة إنشاء فاتورة جديدة
+wait_click_any([
+    (By.XPATH, "//ul[@id='sidebar-menu']//a[.//span[contains(normalize-space(.),'فاتورة المشتريات')]]"),
+    (By.XPATH, "//ul[@id='sidebar-menu']//li[contains(@class,'open')]//a[.//span[contains(normalize-space(),'فاتورة')]]"),
+    (By.XPATH, "//ul[@id='sidebar-menu']//li[contains(@class,'open')]//a[.//span[contains(normalize-space(),'شراء')]]"),
+    (By.XPATH, "//*[@id='sidebar-menu']/li[7]/ul/li[2]/a"),
+])
+print("[OK] فتح شاشة الفواتير")
 
-    # ✅ الآن اختر العنصر "200001 - المورد الاول"
-    click_visible_list_option("200001 - المورد الاول")
+# الضغط على زر جديد
+# الضغط على زر جديد (إضافة)
+wait_click((By.XPATH, "//div[@class='e-toolbar-item e-template' and @title='إضافة']"))
+print("[OK] ضغطت جديد")
 
-    # ✅ فتح تابة وحدة قياس المورد
-    InvItmVndr_units_dropdown_xpath = "(//span[contains(@class,'e-input-group-icon') and contains(@class,'e-ddl-icon') and contains(@class,'e-search-icon')])[12]"
-    click_when_ready(InvItmVndr_units_dropdown_xpath)
+# 1- اضغط على السهم لفتح القائمة
+wait_click((By.XPATH, "(//span[contains(@class,'e-input-group-icon')])[4]"))
 
-    # ✅ الآن اختر العنصر "Unit"
-    click_visible_list_option("Unit")
-    print("✅ تم اختيار وحدة قياس المورد: Unit ✅")
+# 3- لما تنزل، دور على الخيار بالمخزن
+wait_click((By.XPATH, "//li[contains(., '201 - المخزن الرئيسي')]"))
 
-    # إدخال سعر المورد = 20
-    step_pause()
-    cost_field_InvItmVndr = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[@id='grid-cellvndrItmPrice0']/input")))
-    cost_field_InvItmVndr.clear()
-    cost_field_InvItmVndr.send_keys("10")
+# 1- افتح سهم المورد
+wait_click((By.XPATH, "(//span[contains(@class,'e-ddl-icon') and contains(@class,'e-search-icon')])[4]"))
 
-    print("✅ تم إدخال سعر المورد بنجاح (10)")
+# 2- استنى القائمة تنزل واختار مورد عشوائي من العناصر الظاهرة
+supplier_name = click_dynamic_list_option(
+    get_options=get_open_list_options,
+    pick_option=lambda options: random.choice(options),
+)
+print(f"[OK] اخترت المورد عشوائيًا: {supplier_name}")
 
+# فتح دروب داون الصنف
+wait_click((By.XPATH, "//label[contains(text(),'الصنف')]/following::span[contains(@class,'e-ddl-icon')][1]"))
 
-    # ✅ الضغط على زر الإضافة داخل تبويب موردين الوحدة الثانية
-    click_when_ready("(//*[@id='Word'])[2]")
+# اختيار صنف عشوائي من العناصر الظاهرة
+item_name = click_dynamic_list_option(
+    get_options=get_open_list_options,
+    pick_option=lambda options: random.choice(options),
+)
+print(f"[OK] اخترت الصنف عشوائيًا: {item_name}")
 
-    # فتح قائمة البحث عن المورد الثاني
-    click_when_ready(
-        "(//span[contains(@class,'e-input-group-icon') and contains(@class,'e-ddl-icon') and contains(@class,'e-search-icon')])[13]"
-    )
+# تجهيز كميات مختلفة لكل مرة
+qty_values = random.sample(range(5, 25), 3)
+initial_qty, first_edit_qty, second_edit_qty = [str(q) for q in qty_values]
 
-    # ✅ الآن اختر العنصر "200001 - المورد الاول"
-    click_visible_list_option("200001 - المورد الاول")
+# كتابة الكمية في حقل الكمية
+wait_type((By.XPATH, "//*[@id='grid-cellitmQty0']/input"), initial_qty)
+print(f"[OK] أدخلت الكمية {initial_qty}")
 
-    # ✅ فتح تابة وحدة قياس المورد
-    InvItmVndr_units_dropdown_xpath = "(//span[contains(@class,'e-input-group-icon') and contains(@class,'e-ddl-icon') and contains(@class,'e-search-icon')])[14]"
-    click_when_ready(InvItmVndr_units_dropdown_xpath)
-
-
-    # ✅ الآن اختر العنصر "Box"
-    click_visible_list_option("Box")
-    print("✅ تم اختيار وحدة قياس المورد:جديد")
-
-
-    # ✅دخال سعر المورد للوحدة جديد = 240
-    step_pause()
-    cost_field_InvItmVndr = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[@id='grid-cellvndrItmPrice1']/input")))
-    cost_field_InvItmVndr.clear()
-    cost_field_InvItmVndr.send_keys("120")
-    print("✅ تم إدخال سعر المورد بنجاح (120)")
-    step_pause()
-
-    # ✅فتح تبويب "الأسعار"
-    click_when_ready("//*[@id='SalItmPrice']")
-    step_pause()
-    # ✅فتح قائمة البحث عن سعر البيع الاول (فهارس محدّثة — [17] كان يطابق عنصرًا مخفيًا/غير قابل للنقر)
-    sal_price_dd = "(//span[contains(@class,'e-input-group-icon') and contains(@class,'e-ddl-icon') and contains(@class,'e-search-icon')])[19]"
-    click_when_ready(sal_price_dd)
-
-    # ✅ الآن اختر العنصر "Unit"
-    click_visible_list_option("Unit")
-    print("✅ تم اختيار وحدة قياس السعر: Unit ✅")
-    step_pause()
-    # ✅فتح تبويب مستوي السعر الاول
-    click_when_ready(
-        "(//span[contains(@class,'e-input-group-icon') and contains(@class,'e-ddl-icon') and contains(@class,'e-search-icon')])[20]"
-    )
-
-    # ✅ الآن اختر العنصر "مستوي السعر الاول"
-    click_visible_list_option("1 - عام")
-    print("✅ تم اختيار مستوي السعر الاول: 1 - عام ✅")
+# كتابة السعر في حقل السعر
+wait_type((By.XPATH, "//*[@id='grid-cellitmPrice0']/input"), "10")
+print("[OK] أدخلت السعر 10")
+########################################################
 
 
-    # ✅ اكتب السعر للمستوي الاول = 20
+# العثور على input "طريقة الدفع" وفتح الـ dropdown
+# فتح قائمة طرق الدفع
+wait_click_any([
+    (By.XPATH, "//button[normalize-space(text())='طريقة الدفع']"),
+    (By.XPATH, "//button[contains(normalize-space(.),'طريقة الدفع')]"),
+])
+print("[OK] فتحت تاب طريقة الدفع")
 
-    price_field = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[@id='grid-cellitmPrice0']/input")))
-    price_field.clear()
-    price_field.send_keys("20")
-    print("✅ تم إدخال السعر للمستوي الاول بنجاح (20)")
+wait_click_any([
+    (By.XPATH, "//input[@placeholder='طريقة الدفع']/following-sibling::span[contains(@class,'e-ddl-icon')]"),
+    (By.XPATH, "//input[contains(@placeholder,'الدفع')]/following-sibling::span[contains(@class,'e-ddl-icon')]"),
+])
 
-    # ✅ الضغط على زر الإضافة داخل تبويب السعر بوحدة الثانية
-    click_when_ready("(//*[@id='Word'])[5]")
+# اختيار طريقة دفع مرنة: يفضل Cash، وإلا يختار أول قيمة ظاهرة
+payment_name = click_dynamic_list_option(
+    get_options=get_open_list_options,
+    pick_option=lambda options: next((opt for opt in options if "cash" in opt.text.lower()), options[0]),
+)
+print(f"[OK] اخترت طريقة الدفع: {payment_name}")
 
-    # ✅فتح التابة الخاصة بوحدة السعر الثانية
-    click_when_ready(
-        "(//span[contains(@class,'e-input-group-icon') and contains(@class,'e-ddl-icon') and contains(@class,'e-search-icon')])[21]"
-    )
 
+# افتح السهم الخاص برقم الصندوق
+wait_click_any([
+    (By.XPATH, "//input[@placeholder='رقم الصندوق']/following-sibling::span[contains(@class,'e-ddl-icon')]"),
+    (By.XPATH, "//input[contains(@placeholder,'الصندوق')]/following-sibling::span[contains(@class,'e-ddl-icon')]"),
+])
 
-    # ✅اختيار وحدة جديد في السعر الثاني
-    click_visible_list_option("Box")
-    print("✅ تم اختيار وحدة قياس السعر: جديد")
+# اختيار صندوق مرن: يفضل 2001/رئيسي، وإلا يختار أول صندوق ظاهر
+box_name = click_dynamic_list_option(
+    get_options=get_open_list_options,
+    pick_option=lambda options: next(
+        (opt for opt in options if "2001" in opt.text or "رئيسي" in opt.text),
+        options[0]
+    ),
+)
+print(f"[OK] اخترت الصندوق: {box_name}")
 
-    # ✅اضغط علي تابة المستوي الثاني من التسعيره
-    click_when_ready(
-        "(//span[contains(@class,'e-input-group-icon') and contains(@class,'e-ddl-icon') and contains(@class,'e-search-icon')])[22]"
-    )
+# حفظ الفاتورة
+wait_click((By.XPATH, "//ul[@id='quick-menu-body']/li[5]/button"))
+print("[OK] حفظت الفاتورة")
 
-    # ✅اختيار مستوي السعر الثاني
-    click_visible_list_option("1 - عام")
-    print("✅ تم اختيار مستوي السعر الثاني: 1 - عام ✅")
+# تأكيد أن الحفظ اكتمل
+wait_save_complete()
 
-    # ✅ اكتب السعر للمستوي الثاني = 240
+# تعديل الفاتورة بعد الحفظ
+# بعض الشاشات تتطلب تحديد السطر الحالي قبل تفعيل زر التعديل
+try:
+    wait_click_any([
+        (By.XPATH, "//tr[contains(@class,'e-row') and @aria-rowindex='1']"),
+        (By.XPATH, "(//tr[contains(@class,'e-row')])[1]"),
+    ])
+except TimeoutException:
+    pass
 
-    price_field = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[@id='grid-cellitmPrice1']/input")))
-    price_field.clear()
-    price_field.send_keys("240")
-    print("✅ تم إدخال السعر للمستوي الثاني بنجاح (240)")
+open_invoice_edit_mode()
+print("[OK] فتحت وضع تعديل الفاتورة")
 
-    # ✅ حفظ أو تنفيذ العملية النهائية
-    click_when_ready("//ul[@id='quick-menu-body']/li[5]/button/i")
+# تحديث الكمية والسعر ثم إعادة الحفظ
+wait_type((By.XPATH, "//*[@id='grid-cellitmQty0']/input"), first_edit_qty)
+wait_type((By.XPATH, "//*[@id='grid-cellitmPrice0']/input"), "11")
+print(f"[OK] عدلت الكمية إلى {first_edit_qty} والسعر")
 
-    # انتظار اختياري لرسالة نجاح أو أي إشعار ظاهر بعد الحفظ (لا يوقف السكربت إن لم يظهر)
-    try:
-        WebDriverWait(driver, 5).until(
-            EC.presence_of_element_located((By.XPATH, "//*[contains(@class,'e-toast-success')]"))
-        )
-    except TimeoutException:
-        pass
+wait_click_any([
+    (By.XPATH, "//ul[@id='quick-menu-body']/li[5]/button"),
+    (By.XPATH, "//ul[@id='quick-menu-body']//button[contains(normalize-space(.), 'حفظ')]"),
+])
+print("[OK] حفظت التعديل على الفاتورة")
 
-    try:
-        sign_out_via_profile(driver, wait)
-    except Exception as exc:
-        print(f"[WARN] تعذر تسجيل الخروج بعد الحفظ: {exc}")
+wait_save_complete()
 
-    driver.quit()
+# تعديل ثاني: تغيير طريقة الدفع + كمية مختلفة
+open_invoice_edit_mode()
+print("[OK] فتحت وضع تعديل الفاتورة مرة ثانية")
+
+wait_type((By.XPATH, "//*[@id='grid-cellitmQty0']/input"), second_edit_qty)
+print(f"[OK] عدلت الكمية مرة ثانية إلى {second_edit_qty}")
+
+# نفذ تغيير طريقة الدفع في دالة مستقلة لسهولة الفهم وإعادة الاستخدام.
+payment_name_second = change_payment_method_after_second_edit(payment_name)
+
+wait_click_any([
+    (By.XPATH, "//ul[@id='quick-menu-body']/li[5]/button"),
+    (By.XPATH, "//ul[@id='quick-menu-body']//button[contains(normalize-space(.), 'حفظ')]"),
+])
+print("[OK] حفظت التعديل الثاني على الفاتورة")
+
+wait_save_complete()
+driver.quit()
